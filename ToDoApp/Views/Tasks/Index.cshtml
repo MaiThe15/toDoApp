@@ -1,0 +1,138 @@
+@model IEnumerable<ToDoApp.Models.TaskModel>
+
+@{
+    ViewData["Title"] = "Index";
+}
+
+<div class="row">
+    <h1 class="col-6">To do list</h1>
+    <a class="d-flex col-6 justify-content-end" asp-controller="Auth" asp-action="Logout">Logout</a>
+</div>
+
+<p>
+    <a asp-action="Create">Create New</a>
+</p>
+<table class="table" id="ToDoTable">
+    <thead>
+        <tr>
+            <th>
+                @Html.DisplayNameFor(model => model.Name)
+            </th>
+            <th>
+                @Html.DisplayNameFor(model => model.Date)
+            </th>
+            <th>
+                @Html.DisplayNameFor(model => model.Status)
+            </th>
+            <th>
+                Actions
+            </th>
+        </tr>
+    </thead>
+    <tbody id="ToDoBody">
+        @foreach (var item in Model) {
+            @if (!item.Status)
+            {
+                <tr id="task-@item.Id">
+                    <td class="task-name">
+                        @Html.DisplayFor(model => item.Name)
+                    </td>
+                    <td class="task-date">
+                        @item.Date.ToString("dd/MM/yyyy HH:mm")
+                    </td>
+                    <td>
+                        @*@Html.DisplayFor(model => item.Status)*@
+                        <input type="checkbox" data-id="@item.Id" @(item.Status ? "checked" : "") onChange="save(this)"/>
+                    </td>
+                    <td>
+                        <a asp-action="Edit" asp-route-id="@item.Id">Edit</a> |
+                        <a asp-action="Delete" asp-route-id="@item.Id">Delete</a>
+                    </td>
+                </tr>
+            }
+        }
+    </tbody>
+</table>
+
+<hr/>
+<h2>Completed</h2>
+<table class="table" id="CompletedTable">
+    <thead>
+        <tr>
+            <th>
+                @Html.DisplayNameFor(model => model.Name)
+            </th>
+            <th>
+                @Html.DisplayNameFor(model => model.Date)
+            </th>
+            <th>
+                Completed Date
+            </th>
+            <th>
+                Actions
+            </th>
+        </tr>
+    </thead>
+    <tbody id="CompletedBody">
+        @foreach(var item in Model)
+        {
+            @if (item.Status)
+            {
+                <tr id="task-@item.Id">
+                    <td>
+                        @Html.DisplayFor(model => item.Name)
+                    </td>
+                    <td>
+                        @item.Date.ToString("dd/MM/yyyy HH:mm")
+                    </td>
+                    <td>
+                        @item.CompletedDate?.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+                    </td>
+                    <td>
+                        <a asp-action="Delete" asp-route-id="@item.Id">Delete</a>
+                    </td>
+                </tr>
+            }
+        }
+    </tbody>
+</table>
+
+<script>
+    function save(checkbox){
+        const taskId = checkbox.getAttribute('data-id');
+        const isChecked = checkbox.checked;
+        const currentRow = checkbox.closest('tr');
+        checkbox.disabled = true;
+        fetch(`/TASKS/UpdateTaskStatus/${taskId}?status=${isChecked}`, {
+            method: 'POST'
+        })
+        .then(res => {
+            if (!res.ok) throw new Error();
+            return res.json();
+        })
+        .then(data => {
+            if(isChecked){
+                const name = currentRow.querySelector('.task-name').innerText;
+                const date = currentRow.querySelector('.task-date').innerText;
+                const completedDate = data.completedDate;
+                currentRow.remove();
+                const completedRow = `
+                <tr id="task-${taskId}">
+                    <td>${name}</td>
+                    <td>${date}</td>
+                    <td>${completedDate}</td>
+                    <td>
+                        <a href="/Tasks/Delete/${taskId}">Delete</a>
+                    </td>
+                </tr>
+                `;
+                document.getElementById('CompletedBody').insertAdjacentHTML('beforeend', completedRow);
+            }
+        })
+        .catch(() => {
+            alert('Cập nhật thất bại!');
+            checkbox.checked = !checkbox.checked;
+            checkbox.disabled = false;
+        });
+    }
+</script>
