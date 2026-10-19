@@ -19,6 +19,9 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
+    var context = services.GetRequiredService<ToDoAppContext>();
+
+    context.Database.Migrate();
     SeedUserData.Initialize(services);
     SeedTaskData.Initialize(services);
 }

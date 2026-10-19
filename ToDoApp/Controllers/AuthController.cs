@@ -30,11 +30,13 @@ public class AuthController : Controller
             if(check == null)
             {
                 ModelState.AddModelError("Password", "Wrong email or password");
+                return View(user);
             }
             var verify = _passwordHasher.VerifyHashedPassword(check, check.Password, user.Password);
             if (verify == PasswordVerificationResult.Failed)
             {
                 ModelState.AddModelError("Password", "Wrong email or password");
+                return View(user);
             }
             else
             {
