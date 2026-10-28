@@ -5,6 +5,13 @@ using ToDoApp.Models;
 var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("ToDoAppContext") ?? throw new InvalidOperationException("Connection string 'ToDoAppContext' not found.");
 
+var redisConnection = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = redisConnection;
+    options.InstanceName = "ToDoApp_";
+});
+
 builder.Services.AddDbContext<ToDoAppContext>(options => options.UseNpgsql(connectionString));
 
 builder.Services.AddScoped<IPasswordHasher<UserModel>, PasswordHasher<UserModel>>();

@@ -3,22 +3,45 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ToDoApp.Models;
 using ToDoApp.Filter;
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 [AuthenAttribute]
 public class TasksController : Controller
 {
     private readonly ToDoAppContext _context;
+    private readonly IDistributedCache _cache;
 
-    public TasksController(ToDoAppContext context)
+    public TasksController(ToDoAppContext context, IDistributedCache cache)
     {
         _context = context;
+        _cache = cache;
     }
 
     // GET: TASKS
     public async Task<IActionResult> Index(int? userId)    
     {
         userId = HttpContext.Session.GetInt32("curUserId");
-        return View(await _context.Tasks.Where(m => m.UserId == userId).OrderBy(m => m.Date).ToListAsync());
+        //List<TaskModel> task = task = await _context.Tasks.Where(m => m.UserId == userId).OrderBy(m => m.Date).ToListAsync();
+        List<TaskModel>? task;
+        string cacheKey = $"task_user_{userId}";
+        string? cacheData = await _cache.GetStringAsync(cacheKey);
+        if (!string.IsNullOrEmpty(cacheData))
+        {
+            task = JsonSerializer.Deserialize<List<TaskModel>>(cacheData);
+        }
+        else
+        {
+            task = await _context.Tasks.Where(m => m.UserId == userId).OrderBy(m => m.Date).ToListAsync();
+            var cacheOptions = new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5),
+                SlidingExpiration = TimeSpan.FromMinutes(2)
+            };
+            string dataToCache = JsonSerializer.Serialize(task);
+            await _cache.SetStringAsync(cacheKey, dataToCache, cacheOptions);
+        }
+        return View(task);
         //List<TaskModel> tasks = await _context.Tasks.FromSqlRaw("""
         //    select * 
         //    from "Tasks"
@@ -38,18 +61,21 @@ public class TasksController : Controller
     // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Create([Bind("Id,Name,Date,Status, UserId")] TaskModel task)
+    public async Task<IActionResult> Create([Bind("Id,Name,Date,Status")] TaskModel task)
     {
-        if(task.Date < DateTime.UtcNow)
+        var userId = HttpContext.Session.GetInt32("curUserId");
+        if (task.Date < DateTime.UtcNow)
         {
             ModelState.AddModelError("Date", "Can not choose a date from the past");
         }
         if (ModelState.IsValid)
         {
             task.Date = DateTime.SpecifyKind(task.Date, DateTimeKind.Utc);
-            task.UserId = HttpContext.Session.GetInt32("curUserId").Value;
+            task.UserId = userId.Value;
             _context.Add(task);
             await _context.SaveChangesAsync();
+            string cacheKey = $"task_user_{userId}";
+            await _cache.RemoveAsync(cacheKey);
             //var name = task.Name;
             //var date = DateTime.SpecifyKind(task.Date, DateTimeKind.Utc);
             //var status = task.Status;
@@ -69,17 +95,33 @@ public class TasksController : Controller
         {
             return NotFound();
         }
-
-        var task = await _context.Tasks.FindAsync(id);
+        var userId = HttpContext.Session.GetInt32("curUserId");
+        string cacheKey = $"task_detail_{id}_user_{userId}";
+        TaskModel? task;
+        string? cacheData = await _cache.GetStringAsync(cacheKey);
+        if (!string.IsNullOrEmpty(cacheData))
+        {
+            task = JsonSerializer.Deserialize<TaskModel>(cacheData);
+        }
+        else
+        {
+            task = await _context.Tasks.FirstOrDefaultAsync(m => m.Id == id && m.UserId == userId);
+            if(task == null)
+            {
+                return NotFound();
+            }
+            var cacheOptions = new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(2)
+            };
+            string dataToCache = JsonSerializer.Serialize(task);
+            await _cache.SetStringAsync(cacheKey, dataToCache, cacheOptions);
+        }
         //var task = await _context.Tasks.FromSqlInterpolated($"""
         //    select *
         //    from "Tasks"
         //    where "Id" = {id}
         //    """).FirstOrDefaultAsync();
-        if (task == null)
-        {
-            return NotFound();
-        }
         return View(task);
     }
 
@@ -88,41 +130,33 @@ public class TasksController : Controller
     // For more details, see http://go.microsoft.com/fwlink/?LinkId=317598.
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Edit(int? id, [Bind("Id,Name,Date,Status, UserId")] TaskModel task)
+    public async Task<IActionResult> Edit(int? id, [Bind("Id,Name,Date,Status")] TaskModel task)
     {
         if (id != task.Id)
         {
             return NotFound();
         }
-
+        var userId = HttpContext.Session.GetInt32("curUserId");
         if (ModelState.IsValid)
         {
-            try
+            var exisTask = await _context.Tasks.FirstOrDefaultAsync(m => m.Id == id && m.UserId == userId);
+            if(exisTask == null)
             {
-                task.Date = DateTime.SpecifyKind(task.Date, DateTimeKind.Utc);
-                task.UserId = HttpContext.Session.GetInt32("curUserId").Value;
-                _context.Update(task);
-                await _context.SaveChangesAsync();
-                //var name = task.Name;
-                //var date = DateTime.SpecifyKind(task.Date, DateTimeKind.Utc);
-                //var status = task.Status;
-                //await _context.Database.ExecuteSqlInterpolatedAsync($"""
-                //    update "Tasks"
-                //    set "Name" = {name}, "Date" = {date}, "Status" = {status}
-                //    where "Id" = {id}
-                //    """);
+                return NotFound();
             }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!TaskExists(task.Id))
-                {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
-            }
+            exisTask.Name = task.Name;
+            exisTask.Date = DateTime.SpecifyKind(task.Date, DateTimeKind.Utc);
+            await _context.SaveChangesAsync();
+            await _cache.RemoveAsync($"task_user_{userId}");
+            await _cache.RemoveAsync($"task_detail_{id}_user_{userId}");
+            //var name = task.Name;
+            //var date = DateTime.SpecifyKind(task.Date, DateTimeKind.Utc);
+            //var status = task.Status;
+            //await _context.Database.ExecuteSqlInterpolatedAsync($"""
+            //    update "Tasks"
+            //    set "Name" = {name}, "Date" = {date}, "Status" = {status}
+            //    where "Id" = {id}
+            //    """);
             return RedirectToAction(nameof(Index));
         }
         return View(task);
@@ -135,18 +169,34 @@ public class TasksController : Controller
         {
             return NotFound();
         }
-
-        var task = await _context.Tasks
-            .FirstOrDefaultAsync(m => m.Id == id);
+        var userId = HttpContext.Session.GetInt32("curUserId");
+        string cacheKey = $"task_detail_{id}_user_{userId}";
+        TaskModel? task;
+        string? cacheData = await _cache.GetStringAsync(cacheKey);
+        if (!string.IsNullOrEmpty(cacheData))
+        {
+            task = JsonSerializer.Deserialize<TaskModel>(cacheData);
+        }
+        else
+        {
+            task = await _context.Tasks.FirstOrDefaultAsync(m => m.Id == id && m.UserId == userId);
+            if (task == null)
+            {
+                return NotFound();
+            }
+            var cacheOptions = new DistributedCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(2)
+            };
+            string dataToCache = JsonSerializer.Serialize(task);
+            await _cache.SetStringAsync(cacheKey, dataToCache, cacheOptions);
+        }
+        
         //var task = await _context.Tasks.FromSqlInterpolated($"""
         //    select *
         //    from "Tasks"
         //    where "Id" = {id}
         //    """).FirstOrDefaultAsync();
-        if (task == null)
-        {
-            return NotFound();
-        }
 
         return View(task);
     }
@@ -156,7 +206,8 @@ public class TasksController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> DeleteConfirmed(int? id)
     {
-        var task = await _context.Tasks.FindAsync(id);
+        var userId = HttpContext.Session.GetInt32("curUserId");
+        var task = await _context.Tasks.FirstOrDefaultAsync(m => m.Id == id && m.UserId == userId);
         //var task = await _context.Tasks.FromSqlInterpolated($"""
         //    select *
         //    from "Tasks"
@@ -165,20 +216,27 @@ public class TasksController : Controller
         if (task != null)
         {
             _context.Tasks.Remove(task);
+            await _context.SaveChangesAsync();
+            await _cache.RemoveAsync($"task_user_{userId}");
+            await _cache.RemoveAsync($"task_detail_{id}_user_{userId}");
             //await _context.Database.ExecuteSqlInterpolatedAsync($"""
             //    delete
             //    from "Tasks"
             //    where "Id" = {id}
             //    """);
         }
+        else
+        {
+            return NotFound();
+        }
 
-        await _context.SaveChangesAsync();
         return RedirectToAction(nameof(Index));
     }
 
     public async Task<IActionResult> UpdateTaskStatus(int? id, bool status)
     {
-        var task = await _context.Tasks.FindAsync(id);
+        var userId = HttpContext.Session.GetInt32("curUserId");
+        var task = await _context.Tasks.FirstOrDefaultAsync(m => m.Id == id && m.UserId == userId);
         if(task == null)
         {
             return NotFound();
@@ -191,6 +249,8 @@ public class TasksController : Controller
             completedDate = task.CompletedDate;
         }
         await _context.SaveChangesAsync();
+        await _cache.RemoveAsync($"task_user_{userId}");
+        await _cache.RemoveAsync($"task_detail_{id}_user_{userId}");
         return Json(new
         {
             success = true,
